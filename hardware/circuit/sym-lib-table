@@ -1,0 +1,10 @@
+(sym_lib_table
+	(version 7)
+	(lib
+		(name "picodds")
+		(type "KiCad")
+		(uri "${KIPRJMOD}/picodds.kicad_sym")
+		(options "")
+		(descr "")
+	)
+)
