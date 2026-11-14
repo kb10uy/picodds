@@ -40,10 +40,12 @@ fn amplitude_code(amplitude: Amplitude) -> u16 {
     code.min(u32::from(FULL_SCALE)) as u16
 }
 
+#[inline]
 pub const fn channel_a(code: u16) -> u16 {
     UNITY_GAIN | ACTIVE | (code & FULL_SCALE)
 }
 
+#[inline]
 pub const fn channel_b(code: u16) -> u16 {
     CHANNEL_B | UNITY_GAIN | ACTIVE | (code & FULL_SCALE)
 }

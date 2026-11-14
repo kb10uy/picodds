@@ -16,6 +16,7 @@ pub enum Waveform {
 }
 
 impl Waveform {
+    #[inline]
     pub const fn from_u8(value: u8) -> Self {
         match value {
             1 => Waveform::Square,
@@ -25,6 +26,7 @@ impl Waveform {
         }
     }
 
+    #[inline]
     pub fn sample(self, phase: u32, sine: &SineTable) -> u16 {
         match self {
             Waveform::Sine => sine.0[(phase >> (u32::BITS - SINE_BITS)) as usize],
