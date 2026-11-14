@@ -1,0 +1,17 @@
+[package]
+name = "picodds-firmware"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+picodds-core = { path = "../core" }
+
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
+embassy-futures = "0.1.2"
+embassy-rp = { version = "0.10.0", features = ["time-driver", "critical-section-impl", "rp2040"] }
+embassy-time = "0.5.1"
+embassy-usb = "0.6.0"
+
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.7"
