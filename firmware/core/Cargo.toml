@@ -1,0 +1,8 @@
+[package]
+name = "picodds-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+rstest = "0.28.0"
