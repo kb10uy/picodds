@@ -3,13 +3,18 @@ mod line;
 #[cfg(test)]
 mod tests;
 
-use crate::settings::{InvalidValue, Setting, Settings, Value};
+use crate::{
+    custom::{Bank, FlashError, MAX_SAMPLES, Slot, SlotFlash},
+    settings::{InvalidValue, Setting, Settings, Value},
+};
 use command::{Command, ParseError};
 use core::fmt::{self, Write};
 use line::{LineBuffer, LineTooLong};
 
 const BS: u8 = 0x08;
 const DEL: u8 = 0x7F;
+
+pub const LINE_BYTES: usize = 64 + 4 * MAX_SAMPLES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -18,21 +23,25 @@ pub enum Action {
 
 pub trait Generator {
     fn apply(&mut self, settings: &Settings);
+    fn mute(&mut self);
+    fn unmute(&mut self);
 }
 
-pub struct Controller<const LINE: usize> {
+pub struct Controller<'b, const LINE: usize> {
     line: LineBuffer<LINE>,
     after_cr: bool,
     settings: Settings,
+    bank: &'b Bank,
     version: &'static str,
 }
 
-impl<const LINE: usize> Controller<LINE> {
-    pub const fn new(settings: Settings, version: &'static str) -> Self {
+impl<'b, const LINE: usize> Controller<'b, LINE> {
+    pub const fn new(settings: Settings, bank: &'b Bank, version: &'static str) -> Self {
         Self {
             line: LineBuffer::new(),
             after_cr: false,
             settings,
+            bank,
             version,
         }
     }
@@ -45,6 +54,7 @@ impl<const LINE: usize> Controller<LINE> {
         &mut self,
         byte: u8,
         generator: &mut impl Generator,
+        flash: &mut impl SlotFlash,
         out: &mut impl Write,
     ) -> Option<Action> {
         let after_cr = core::mem::replace(&mut self.after_cr, byte == b'\r');
@@ -53,7 +63,14 @@ impl<const LINE: usize> Controller<LINE> {
             b'\r' | b'\n' => {
                 let result = match self.line.contents() {
                     Ok([]) => None,
-                    Ok(line) => Some(execute(&mut self.settings, self.version, line, generator)),
+                    Ok(line) => Some(execute(
+                        &mut self.settings,
+                        self.bank,
+                        self.version,
+                        line,
+                        generator,
+                        flash,
+                    )),
                     Err(LineTooLong) => Some(Err(Error::LineTooLong)),
                 };
                 let action = match result {
@@ -84,9 +101,11 @@ impl<const LINE: usize> Controller<LINE> {
 
 fn execute<'s>(
     settings: &'s mut Settings,
+    bank: &'s Bank,
     version: &'static str,
     line: &[u8],
     generator: &mut impl Generator,
+    flash: &mut impl SlotFlash,
 ) -> Result<Reply<'s>, Error> {
     match command::parse(line)? {
         Command::Set(setting, value) => {
@@ -99,6 +118,14 @@ fn execute<'s>(
             *settings = Settings::default();
             generator.apply(settings);
         }
+        Command::WSet(slot, format, hex) => bank.slot(slot).set(format, hex)?,
+        Command::WGet(slot) => return Ok(Reply::Slot(bank.slot(slot))),
+        Command::WClear(slot) => bank.slot(slot).clear(),
+        Command::WSave => save(bank, generator, flash)?,
+        Command::WWipe => {
+            bank.clear();
+            save(bank, generator, flash)?;
+        }
         Command::Ver => return Ok(Reply::Version(version)),
         Command::Bootsel => return Ok(Reply::Bootsel),
         Command::Help => return Ok(Reply::Help),
@@ -106,11 +133,27 @@ fn execute<'s>(
     Ok(Reply::Ok)
 }
 
+fn save(
+    bank: &Bank,
+    generator: &mut impl Generator,
+    flash: &mut impl SlotFlash,
+) -> Result<(), FlashError> {
+    let stale = bank.stale_slots(flash)?;
+    if stale == 0 {
+        return Ok(());
+    }
+    generator.mute();
+    let result = bank.rewrite(stale, flash);
+    generator.unmute();
+    result
+}
+
 enum Reply<'a> {
     Ok,
     Bootsel,
     Value(Value<'a>),
     Settings(&'a Settings),
+    Slot(&'a Slot),
     Version(&'static str),
     Help,
 }
@@ -124,6 +167,7 @@ impl fmt::Display for Reply<'_> {
             Reply::Settings(settings) => Setting::ALL.into_iter().try_for_each(|setting| {
                 write!(f, " {}={}", setting.name(), settings.value(setting))
             }),
+            Reply::Slot(slot) => write!(f, " {slot}"),
             Reply::Version(version) => write!(f, " {version}"),
             Reply::Help => command::NAMES
                 .into_iter()
@@ -139,6 +183,7 @@ enum Error {
     UnknownSetting,
     BadValue,
     LineTooLong,
+    Flash,
 }
 
 impl From<ParseError> for Error {
@@ -147,6 +192,7 @@ impl From<ParseError> for Error {
             ParseError::UnknownCommand => Error::UnknownCommand,
             ParseError::BadArgument => Error::BadArgument,
             ParseError::UnknownSetting => Error::UnknownSetting,
+            ParseError::BadValue => Error::BadValue,
         }
     }
 }
@@ -154,6 +200,12 @@ impl From<ParseError> for Error {
 impl From<InvalidValue> for Error {
     fn from(_: InvalidValue) -> Self {
         Error::BadValue
+    }
+}
+
+impl From<FlashError> for Error {
+    fn from(_: FlashError) -> Self {
+        Error::Flash
     }
 }
 
@@ -165,6 +217,7 @@ impl fmt::Display for Error {
             Error::UnknownSetting => "unknown setting",
             Error::BadValue => "bad value",
             Error::LineTooLong => "line too long",
+            Error::Flash => "flash error",
         })
     }
 }

@@ -1,33 +1,49 @@
+use crate::custom::{Bank, SLOTS};
 use core::f64::consts::FRAC_PI_2;
 
 pub const FULL_SCALE: u16 = 4095;
+pub const MIDDLE: u16 = 1 << 11;
 
 const SINE_BITS: u32 = 12;
 const SINE_LEN: usize = 1 << SINE_BITS;
 const TAYLOR_TERMS: u32 = 10;
+const CUSTOM_BASE: u8 = 16;
+const CUSTOM_END: u8 = CUSTOM_BASE + SLOTS as u8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
 pub enum Waveform {
-    Sine = 0,
-    Square = 1,
-    Triangle = 2,
-    Sawtooth = 3,
+    Sine,
+    Square,
+    Triangle,
+    Sawtooth,
+    Custom(u8),
 }
 
 impl Waveform {
+    #[inline]
+    pub const fn to_u8(self) -> u8 {
+        match self {
+            Waveform::Sine => 0,
+            Waveform::Square => 1,
+            Waveform::Triangle => 2,
+            Waveform::Sawtooth => 3,
+            Waveform::Custom(slot) => CUSTOM_BASE + slot,
+        }
+    }
+
     #[inline]
     pub const fn from_u8(value: u8) -> Self {
         match value {
             1 => Waveform::Square,
             2 => Waveform::Triangle,
             3 => Waveform::Sawtooth,
+            CUSTOM_BASE..CUSTOM_END => Waveform::Custom(value - CUSTOM_BASE),
             _ => Waveform::Sine,
         }
     }
 
     #[inline]
-    pub fn sample(self, phase: u32, sine: &SineTable) -> u16 {
+    pub fn sample(self, phase: u32, sine: &SineTable, bank: &Bank) -> u16 {
         match self {
             Waveform::Sine => sine.0[(phase >> (u32::BITS - SINE_BITS)) as usize],
             Waveform::Square if phase < 1 << 31 => FULL_SCALE,
@@ -41,6 +57,7 @@ impl Waveform {
                 }
             }
             Waveform::Sawtooth => (phase >> 20) as u16,
+            Waveform::Custom(slot) => bank.slot(slot).sample(phase),
         }
     }
 }
@@ -96,6 +113,7 @@ const fn sin(x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{FULL_SCALE, SINE_LEN, SineTable, Waveform};
+    use crate::custom::{Bank, Format};
     use core::f64::consts::TAU;
     use rstest::rstest;
 
@@ -128,7 +146,19 @@ mod tests {
     #[case(Waveform::Sawtooth, 1 << 31, 2048)]
     #[case(Waveform::Sawtooth, u32::MAX, FULL_SCALE)]
     fn samples_waveforms(#[case] waveform: Waveform, #[case] phase: u32, #[case] code: u16) {
-        assert_eq!(waveform.sample(phase, &SineTable::new()), code);
+        assert_eq!(
+            waveform.sample(phase, &SineTable::new(), &Bank::new()),
+            code
+        );
+    }
+
+    #[test]
+    fn samples_custom_slots() {
+        let bank = Bank::new();
+        bank.slot(15).set(Format::I16, b"7FFF").unwrap();
+        let sine = SineTable::new();
+        assert_eq!(Waveform::Custom(15).sample(0, &sine, &bank), FULL_SCALE);
+        assert_eq!(Waveform::Custom(14).sample(0, &sine, &bank), 2048);
     }
 
     #[rstest]
@@ -136,7 +166,9 @@ mod tests {
     #[case(Waveform::Square)]
     #[case(Waveform::Triangle)]
     #[case(Waveform::Sawtooth)]
+    #[case(Waveform::Custom(0))]
+    #[case(Waveform::Custom(15))]
     fn round_trips_through_u8(#[case] waveform: Waveform) {
-        assert_eq!(Waveform::from_u8(waveform as u8), waveform);
+        assert_eq!(Waveform::from_u8(waveform.to_u8()), waveform);
     }
 }

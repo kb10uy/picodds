@@ -1,4 +1,5 @@
 use crate::{
+    custom::parse_slot,
     keyword::{keyword, parse_keyword},
     waveform::Waveform,
 };
@@ -12,6 +13,13 @@ const WAVEFORMS: [(&str, Waveform); 4] = [
 ];
 const MAX_WHOLE_DIGITS: usize = 9;
 const MAX_FRACTION_DIGITS: usize = 3;
+
+fn parse_waveform(text: &[u8]) -> Option<Waveform> {
+    parse_keyword(text, &WAVEFORMS).or_else(|| match text {
+        [b'W' | b'w', slot @ ..] => parse_slot(slot).map(Waveform::Custom),
+        _ => None,
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Frequency(u32);
@@ -132,7 +140,7 @@ pub struct InvalidValue;
 impl Settings {
     pub fn set(&mut self, setting: Setting, value: &[u8]) -> Result<(), InvalidValue> {
         let applied = match setting {
-            Setting::Wave => parse_keyword(value, &WAVEFORMS).map(|wave| self.waveform = wave),
+            Setting::Wave => parse_waveform(value).map(|wave| self.waveform = wave),
             Setting::Freq => Frequency::parse(value).map(|freq| self.frequency = freq),
             Setting::Amp => Amplitude::parse(value).map(|amp| self.amplitude = amp),
         };
@@ -156,7 +164,10 @@ impl fmt::Display for Value<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = self.settings;
         match self.setting {
-            Setting::Wave => f.write_str(keyword(s.waveform, &WAVEFORMS)),
+            Setting::Wave => match s.waveform {
+                Waveform::Custom(slot) => write!(f, "W{slot}"),
+                waveform => f.write_str(keyword(waveform, &WAVEFORMS)),
+            },
             Setting::Freq => write_milli(f, s.frequency.0),
             Setting::Amp => write_milli(f, u32::from(s.amplitude.0)),
         }
@@ -174,6 +185,9 @@ mod tests {
     #[case(Setting::Wave, "Square", "SQUARE")]
     #[case(Setting::Wave, "TRIANGLE", "TRIANGLE")]
     #[case(Setting::Wave, "saw", "SAW")]
+    #[case(Setting::Wave, "W0", "W0")]
+    #[case(Setting::Wave, "w15", "W15")]
+    #[case(Setting::Wave, "W07", "W7")]
     #[case(Setting::Freq, "1000", "1000")]
     #[case(Setting::Freq, "0.001", "0.001")]
     #[case(Setting::Freq, "440.0", "440")]
@@ -194,6 +208,9 @@ mod tests {
     #[rstest]
     #[case(Setting::Wave, "SIN")]
     #[case(Setting::Wave, "")]
+    #[case(Setting::Wave, "W")]
+    #[case(Setting::Wave, "W16")]
+    #[case(Setting::Wave, "W-1")]
     #[case(Setting::Freq, "0")]
     #[case(Setting::Freq, "0.0001")]
     #[case(Setting::Freq, "100000.001")]

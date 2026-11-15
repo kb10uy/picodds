@@ -1,4 +1,4 @@
-use crate::generator::Tuner;
+use crate::{generator::Tuner, store::Store};
 use core::fmt;
 use embassy_rp::rom_data::reset_to_usb_boot;
 use embassy_time::Timer;
@@ -7,21 +7,23 @@ use embassy_usb::{
     driver::{Driver, EndpointError},
 };
 use picodds_core::{
-    control::{Action, Controller},
+    control::{Action, Controller, Generator, LINE_BYTES},
+    custom::Bank,
     settings::Settings,
 };
 
 pub const MAX_PACKET_SIZE: u16 = 64;
 
-const LINE_BYTES: usize = 64;
-const REPLY_BYTES: usize = 128;
+const REPLY_BYTES: usize = LINE_BYTES;
 
 pub async fn run<'d, D: Driver<'d>>(
     mut class: CdcAcmClass<'d, D>,
     settings: Settings,
+    bank: &'static Bank,
     mut tuner: Tuner,
+    mut store: Store,
 ) -> ! {
-    let mut controller = Controller::<LINE_BYTES>::new(settings, env!("CARGO_PKG_VERSION"));
+    let mut controller = Controller::<LINE_BYTES>::new(settings, bank, env!("CARGO_PKG_VERSION"));
     let mut packet = [0; MAX_PACKET_SIZE as usize];
     let mut reply = Reply::new();
     loop {
@@ -29,11 +31,12 @@ pub async fn run<'d, D: Driver<'d>>(
         while let Ok(len) = class.read_packet(&mut packet).await {
             for &byte in &packet[..len] {
                 reply.clear();
-                let action = controller.feed(byte, &mut tuner, &mut reply);
+                let action = controller.feed(byte, &mut tuner, &mut store, &mut reply);
                 if let Some(line) = reply.line() {
                     let _ = write_line(&mut class, line).await;
                 }
                 if action == Some(Action::Bootsel) {
+                    tuner.mute();
                     Timer::after_millis(50).await;
                     reset_to_usb_boot(0, 0);
                 }
